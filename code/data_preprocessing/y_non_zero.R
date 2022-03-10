@@ -1,9 +1,7 @@
 library(tidyverse)
 
-# working directory of project folder
-setwd("C:/Users/Laura/Desktop/final")
 
-# species_birds.rds: data set obtained from Ikedichi (script: BBS_data_EDITED.Rmd)
+# species_birds.rds: data processed by Ikedichi (script: BBS_data_EDITED.Rmd)
 data <- readRDS("data/species_birds.rds")
 str(data)
 

@@ -4,7 +4,6 @@ library(tidyverse)
 library(plyr)
 library(comprehenr)
 
-setwd("C:/Users/Laura/Desktop/final")
 
 # environmental data
 full_routes <- vroom("data/Full_routes.csv")
