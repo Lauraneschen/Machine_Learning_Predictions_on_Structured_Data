@@ -1,0 +1,470 @@
+---
+title: "Edited BBS data"
+author: "Ikedichi"
+date: "11/11/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 01: Get Data
+
+```{r , warning=FALSE, message=FALSE}
+setwd("C:/ik1015/simulations/BBS_data")
+
+##############################################################
+# 01 Get data
+##############################################################
+
+# *********** dependent libraries ********** #
+
+# install.packages("requirement/bbsBayes_2.3.4.2020.tgz", repos = NULL, type = .Platform$pkgType)
+library(bbsBayes)   
+library(tidyverse)
+library(here)
+
+# note this requires mbjoseph/bbsBayes@noninteractive from GitHub
+# remotes::install_github("mbjoseph/bbsBayes@noninteractive")
+
+
+# *********** load data ********** #
+
+# Fetch Breeding Bird Survey dataset (through FTP from USGS database FTP-site)
+fetch_bbs_data(level = 'stop') 
+# Using data directory at C:\Users\IKEDIC~1\AppData\Local/bbsBayes/bbsBayes
+# Saving BBS data to C:\Users\IKEDIC~1\AppData\Local\bbsBayes\bbsBayes
+
+
+# load these files from the directory where `fetch_bbs_data` saved the data into R
+load(list.files("C:\\Users\\Ikedichi_Azuh\\AppData\\Local\\bbsBayes\\bbsBayes", full.names = TRUE))
+
+str(bbs_data) # contains dataframe for bird, route and species
+
+
+# *********** save the data in the working directory `data/bbs_aggregated` ********** #
+
+# ( here() appends its arguments as path components to the root directory )
+historical_dir <- here('data', 'bbs_aggregated')
+
+# create a directory (to store the data)
+dir.create(historical_dir, recursive = TRUE, showWarnings = FALSE)
+# `bbs_data` is a list with three elements (bird, route, species)
+# assign the file name to export 
+out_files <- historical_dir %>%
+  file.path(names(bbs_data)) %>%
+  paste0('.csv')
+
+# export the data according to each of the three elements of `bbs_data` 
+for (i in seq_along(bbs_data)) {
+  write_csv(bbs_data[[i]], out_files[i])
+}
+# result: three .csv files in `data/bbs_aggregated`
+
+
+rm(list = ls())
+
+
+```
+
+##  02: EDA
+
+```{r , warning=FALSE, message=FALSE}
+
+##############################################################
+# 02 eda
+##############################################################
+
+library(tidyverse)
+library(assertthat)
+library(sf)
+library(vroom)           # install.packages("vroom")
+library(parallel)
+library(pbapply)
+
+
+# ********** read the data from `data/bbs_aggregated` *********** # 
+
+# vroom::vroom reads (large) files fast
+counts <- vroom('data/bbs_aggregated/bird.csv') %>%
+  filter(Year >= 1997) %>%
+  rename(aou = AOU) %>%
+  mutate(route_id = paste(sprintf('%02d', statenum), 
+                          sprintf('%03d', Route), 
+                          sep = '_'))
+
+
+
+unique(counts$Year)
+
+routes <- read_csv('data/bbs_aggregated/route.csv') %>%
+  filter(Year >= 1997) %>%
+  mutate(StartTemp = parse_number(StartTemp), 
+         EndTemp = parse_number(EndTemp), 
+         route_id = paste(sprintf('%02d', statenum), 
+                          sprintf('%03d', Route), 
+                          sep = '_'), 
+         TempScale = ifelse(TempScale == 'f', 'F', TempScale), 
+         TempScale = ifelse(TempScale == 'c', 'C', TempScale),
+         
+         
+         # unique(routes$TempScale) == "C"    "F"    "NULL" NA     "c"    "f"
+         ### based on visual inspection, NULL and NA tempscales are F
+         
+         TempScale = ifelse(TempScale == "NULL", 'F', TempScale),
+         TempScale = ifelse(is.na(TempScale), 'F', TempScale),
+          
+         # there are a lot of records with start/end temp 0, 0
+         StartTemp = ifelse(StartTemp == 0 & TempScale == 'F', NA, StartTemp),
+         EndTemp = ifelse(EndTemp == 0 & TempScale == 'F', NA, EndTemp),
+         
+          # remove crazy values that are obviously wrong
+         EndTemp = ifelse(EndTemp > 55, NA, EndTemp), 
+         EndTemp = ifelse(EndTemp < -5, NA, EndTemp), 
+         StartTemp = ifelse(StartTemp > 55, NA, StartTemp),
+         
+         new_temp_scale_C = ifelse(TempScale == 'F',
+                            (StartTemp - 32) * 5/9, StartTemp)
+         
+         )
+       
+ routes$new_temp_scale_C = round(routes$new_temp_scale_C, 2)
+
+
+
+# ********** ensure that all routes in the count data have route-level data ********** #
+
+counts <- counts %>%
+  filter(route_id %in% routes$route_id, 
+         RouteDataID %in% routes$RouteDataID)
+
+
+# *********** assert_that: Assert that certain conditions are true ************
+assert_that(all(counts$route_id %in% routes$route_id))
+assert_that(all(counts$RouteDataID %in% routes$RouteDataID))
+
+
+# ********** the species data ********** #
+
+species <- read_csv('data/bbs_aggregated/species.csv')
+species$full_species <- paste(species$genus, species$species, sep="_")
+str(species)
+
+
+# ********** remove certain species ********** #
+
+# to be removed: unidentified? and hybrid
+rm_sp <- species %>%
+  filter(grepl('unid', english, ignore.case = TRUE) | grepl('hybrid', english))
+
+# remove these species
+species <- species %>%
+  filter(!(aou %in% rm_sp$sp.bbs))%>% 
+  mutate("aou" = as.numeric(aou))
+
+
+counts <- counts %>%
+  filter(!(aou %in% rm_sp$sp.bbs))
+
+
+
+# **********  ********** #
+
+# compute the number of stops where each species was seen
+# ç¨stop1 ~ stop50 ç®row sum
+
+counts$y <- counts %>%
+  select(starts_with('Stop')) %>%
+  as.matrix %>%
+  `!=`(., 0) %>%
+  rowSums
+
+
+count_combos <- counts %>%
+  select(RouteDataID, aou, y) %>%
+ 
+   # complete: Turns implicit missing values into explicit missing values
+  complete(aou, RouteDataID, fill = list(y = 0)) %>%
+  left_join(select(routes, RouteDataID, Year, route_id)) %>%
+  arrange(route_id, Year, RouteDataID)  %>%
+  filter(Year >= 1997)
+
+wide_counts <- count_combos %>%
+  select(-RouteDataID) %>%
+  spread(Year, y)
+
+
+# all route data ids in the count data are represented in route data
+assert_that(all(counts$RouteDataID %in% routes$RouteDataID))
+
+### merge species dataset and Bird(counts)
+
+species_birds <- full_join(species, counts[,1:7], by = "aou")
+
+dir.create('data/cleaned', recursive = TRUE)
+
+write_csv(species_birds, 'data/cleaned/species_birds.csv')
+write_rds(species_birds, 'data/cleaned/species_birds.rds')
+write_csv(wide_counts, 'data/cleaned/bbs_counts.csv')
+write_csv(species, 'data/cleaned/bbs_species.csv')
+write_csv(routes, 'data/cleaned/bbs_routes.csv')
+
+```
+
+## 03 extract route features 
+
+
+```{r , warning=FALSE, message=FALSE}
+
+##############################################################
+# 03 extract route features 
+##############################################################
+
+library(sf)
+library(fasterize)     # install.packages("fasterize")
+library(raster)
+library(tidyverse)
+library(RStoolbox)     # install.packages("RStoolbox")
+library(elevatr)       # install.packages("elevatr")
+library(rmapshaper)    # install.packages("rmapshaper")
+library(rnaturalearth) 
+
+# ********** ecoregion data from US-EPA database ********** #
+# data source: ftp://newftp.epa.gov/EPADataCommons/ORD/Ecoregions/cec_na/
+
+ecoregions <- st_read("data/NA_CEC_Eco_Level3/NA_CEC_Eco_Level3.shp") %>%
+  st_transform(4326)
+
+head(ecoregions)
+
+
+
+# ********** extract the ecoregion data for BBS routes ********** #
+routes <- read_csv("data/cleaned/bbs_routes.csv") %>%
+  mutate(route_id = paste(sprintf('%02d', statenum), 
+                   sprintf('%03d', Route), 
+                   sep = '_'))
+
+get_ecoregions <- function(sf, ecoregions) {
+  intx <- st_intersects(sf, ecoregions)
+  indices <- lapply(intx, function(x) {
+    if (length(x) == 0) {
+      x <- NA
+    }
+    x
+  }) %>%
+    unlist
+  
+  sf$L3_KEY <- ecoregions$NA_L3KEY[indices]
+  sf$L2_KEY <- ecoregions$NA_L2KEY[indices]
+  sf$L1_KEY <- ecoregions$NA_L1KEY[indices] 
+  sf
+}
+  
+
+
+
+# ********** Get bioclim data ********** #
+
+bioclim_raster <- 'data/bioclim/bioclim_pca.rds'
+if (!file.exists(bioclim_raster)) {
+  # download the file
+  # available data 2020/11/17: https://biogeo.ucdavis.edu/data/worldclim/v2.1/base/wc2.1_10m_bio.zip
+  # seems to be a new version
+  download.file('https://biogeo.ucdavis.edu/data/worldclim/v2.1/base/wc2.1_10m_bio.zip','data/wc2.1_10m_bio.zip')                                                                                                                                         
+  dir.create('data/bioclim', showWarnings = FALSE)
+  unzip('data/wc2.1_10m_bio.zip', exdir = 'data/bioclim')
+  # read the file
+  bioclim_files <- list.files(path = 'data/bioclim', pattern = '.tif', 
+                              full.names = TRUE)
+  bioclim <- stack(bioclim_files) 
+  # the parts that overlap with the ecoregion layer (shapefile)
+  bioclim <- crop(bioclim, 
+                  as(st_transform(ecoregions, crs(bioclim)), 'Spatial'))
+  
+  er_raster <- ecoregions %>%
+    mutate(l3_int = as.numeric(factor(NA_L3KEY))) %>%
+    st_transform(crs(bioclim)) %>%
+    # fasterize(): Rasterize an sf object of polygons
+    fasterize(bioclim[[1]], field = "l3_int", fun = "first")
+  
+  bioclim <- bioclim %>%
+    mask(er_raster)
+
+  bioclim_pca <- rasterPCA(bioclim, spca = TRUE)
+  write_rds(bioclim_pca, bioclim_raster)
+} else {
+  bioclim_pca <- read_rds(bioclim_raster)
+}
+
+# ********** first eight dimensions account for > 99% of the variance ********** #
+summary(bioclim_pca$model)
+
+
+######### route as simple file sf
+routes_sf1 <- routes %>%
+  distinct(route_id, Latitude, Longitude) %>%
+  st_as_sf(coords = c('Longitude', 'Latitude'), 
+           crs = 4326) %>%
+  st_transform(st_crs(ecoregions))
+#####################################
+
+# But the route dataframe can also be called from excel
+
+library(readr)
+routes <- read_csv("data/cleaned/bbs_routes.csv")
+
+##############################
+
+routes_sf <- routes %>%
+  distinct(route_id, Longitude, Latitude) 
+
+
+########### elevatr (version 0.4.1)
+###########################################
+###### get_elev_point: Get Point Elevation
+###########################################
+
+# as a dataframe with Longitude as first variable:
+ 
+routes_sf2 <- cbind.data.frame("Longitude" = routes_sf$Longitude, "Latitude" = routes_sf$Latitude)
+
+ll_prj <- "EPSG:4326"
+routes_sf2_sp <- sp::SpatialPoints(sp::coordinates(routes_sf2), 
+                            proj4string = sp::CRS(SRS_string = ll_prj))
+
+routes_sf2_spdf <- SpatialPointsDataFrame(routes_sf2_sp, data.frame(row.names=row.names(routes_sf2_sp),
+                        ID=1:length(routes_sf2_sp)))
+
+routes_sf2_raster <- raster::raster(routes_sf2_sp, ncol = 2, nrow = nrow(routes_sf2))
+
+elev_sp <- get_elev_point(locations = routes_sf2_sp, src="aws", units="meters")
+elev_spdf <- get_elev_point(locations = routes_sf2_spdf, src="aws", units="meters")
+elev_raster <- get_elev_point(locations = routes_sf2_raster, src="aws", units="meters")
+
+# Code to split into a loop and grab point at a time.
+# This is usually faster for points that are spread apart 
+ 
+library(dplyr)
+
+elev <- vector("numeric", length = nrow(routes_sf2))
+pb <- progress_estimated(length(elev))
+for(i in 1:4673){
+pb$tick()$print()
+elev[i]<-suppressMessages(get_elev_point(locations = routes_sf2[i,], prj = ll_prj, 
+                                        src = "aws", units="meters")$elevation)
+                                        }
+fast_elev <- cbind(routes_sf2, elev)
+View(fast_elev)
+
+
+
+####################################################################
+
+
+# ********** extract PCs for BBS routes ********** #
+bioclim_df <- routes_sf1 %>%
+  st_transform(crs(bioclim_pca$map)) %>%
+  raster::extract(bioclim_pca$map, .) %>%
+  as_tibble %>%
+  dplyr::select(PC1:PC8) %>%
+  mutate(route_id = routes_sf1$route_id)
+
+
+
+##################################################
+# This second code produced alittle different values for the elevation
+##########################################################################
+
+# Note that the simple file format of route (route_sf1) will be used here
+
+
+# ********** get elevation data ********** #
+if (!file.exists('data/elevation.rds')) {
+  elev <- get_elev_point(as(routes_sf1, "Spatial"), src="aws", units="meters")
+  write_rds(elev, 'data/elevation.rds')
+} else {
+  elev <- read_rds('data/elevation.rds')
+}
+elev_df <- as.data.frame(elev) %>%
+  as_tibble() %>%
+  dplyr::select(route_id, elevation)
+
+###############################################################################################
+
+
+############################################################################################
+# ********** get grip road density data for Landarea ********** #
+############################################################################################
+
+# data location
+roads_url <- "https://dataportaal.pbl.nl/downloads/GRIP4/GRIP4_density_total.zip"   # available data source 2021/10/14
+
+if (!file.exists('data/grip4_total_dens_m_km2.asc')) {
+  download.file(roads_url, destfile = file.path('data', basename(roads_url)))
+  unzip(file.path('data', basename(roads_url)), exdir = 'data')
+}
+
+# Read in landcover raster
+land_area <- raster('data/grip4_area_land_km2.asc')
+plot(land_area, axes=FALSE)
+
+
+projection(land_area) <- st_crs(as(routes_sf1, "Spatial"))$proj4string
+
+land_area <- projectRaster(land_area, crs = CRS(st_crs(as(routes_sf1, "Spatial"))$proj4string))
+
+
+routes_sf1$land_area <- raster::extract(land_area, as(routes_sf1, "Spatial"), 
+                                      buffer = 10000, fun = mean) %>%
+                                      unlist
+
+routes_sf1$land_area <- ifelse(is.na(routes_sf1$land_area), 
+                             mean(routes_sf1$land_area, na.rm = TRUE), 
+                             routes_sf1$land_area)
+
+routes_sf1$c_land_area <- c(scale(log(routes_sf1$land_area + 1))) #Scaled landarea
+
+
+# Plots compare
+plot(routes_sf1['land_area'], pch = 19, cex = .8) #Non-scaled landarea
+plot(routes_sf1['c_land_area'], pch = 19, cex = .8) #Scaled landarea
+
+
+
+# Bringing the dataset together
+#######################################
+
+routes_sf1 <- routes_sf1 %>%
+  left_join(bioclim_df) %>%
+  left_join(elev_df)
+
+
+plot(routes_sf1, pch = 19, max.plot = 18, cex = .5)
+
+# dataset with distinct routes, route_id, Latitude and Longitude
+routes_sf1 %>%
+  as.data.frame %>%
+  dplyr::select(-geometry) %>%
+  as_tibble() %>%
+  left_join(distinct(routes, route_id, Latitude, Longitude)) %>%
+  write_csv('data/cleaned/routes.csv')
+
+
+# ********** export the cleaned route feature shapefile ********** #
+st_write(routes_sf, 'data/cleaned/routes.shp', delete_dsn = TRUE)
+
+
+# the full dataset
+newroute <- routes_sf1 %>%
+  as.data.frame %>%
+  dplyr::select(-geometry) %>%
+  as_tibble() %>%
+  left_join(routes[, -c(2:5,8:12,18:24,27:29,31)], by="route_id") %>%
+  write_csv('data/cleaned/Full_routes.csv') 
+  
+  
+``` 
