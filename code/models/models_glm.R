@@ -8,11 +8,6 @@ library(parglm)
 # both models (glm and gradient boosted tree) were analysed separately to avoid that R crashes
 # however they use exactly the same data
 
-# increase memory limit to avoid error messages
-memory.limit(size = 100000)
-
-setwd("C:/Users/Laura/Desktop/final")
-
 
 ##### load data #####
 # BBS data
