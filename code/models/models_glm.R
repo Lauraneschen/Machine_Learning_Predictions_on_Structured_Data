@@ -89,7 +89,7 @@ data <- left_join(data, weights)
 RMSE_glm <- c()
 RMSE_glm_int <- c()
 
-for(k in 1:1){
+for(k in 1:folds){
   
   # assign train and test data
   train <- data[data$fold != k,]

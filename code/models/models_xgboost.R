@@ -86,7 +86,7 @@ data <- left_join(data, weights)
 RMSE_xgboost <- c()
 RMSE_xgboost_int <- c()
 
-for(k in 3:5){
+for(k in 1:folds){
   
   # assign train and test data
   train <- data[data$fold != k,]
