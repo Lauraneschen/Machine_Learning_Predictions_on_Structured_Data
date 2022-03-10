@@ -5,9 +5,6 @@ library(ranger)
 library(parglm)
 library(xgboost)
 
-memory.limit(size = 100000)
-
-setwd("C:/Users/Laura/Desktop/final")
 
 
 ##### load data #####
@@ -21,28 +18,15 @@ full_routes <- vroom("data/Full_routes.csv")
 sampling <- read.csv("data/areas.csv")
 
 
-
 ##### data pre-processing #####
 # unique locations (route_id is a unique combination of Longitude and Latitude)
 full_routes <- full_routes %>% 
-  drop_na(PC1, Longitude, Latitude)
+  drop_na(PC1, Longitude, Latitude, Year)
 
 locations <- full_routes %>% 
   group_by(route_id, Longitude, Latitude) %>% 
   summarise() %>% 
   ungroup()
-
-# map of all locations
-ggplot() +
-  geom_point(data = locations, aes(x = Longitude, y = Latitude))
-
-set.seed(20)
-species <- sample(unique(data$sp.bbs), size = 400)
-
-# remove entries with missing data in PCA axes, species or year
-data <- data %>% 
-  filter(sp.bbs %in% species) %>% 
-  drop_na(PC1, sp.bbs, Year)
 
 
 # assign folds for cross-validation to locations
@@ -75,31 +59,27 @@ sampling <- sampling %>%
 locations <- full_join(locations, sampling)
 
 
-# then join with data (assigns folds and sampling probabilities to the data)
+# BBS data: select 400 species randomly
+set.seed(20)
+species <- sample(unique(data$sp.bbs), size = 400)
+
+data <- data %>% 
+  filter(sp.bbs %in% species) %>% 
+  drop_na(PC1, sp.bbs, Year)
+
+
+# join location data with survey data (assigns folds and areas of voronoi polygons to the survey data)
 data_new <- full_join(data, locations, by = "route_id")
 data <- data_new %>% 
   drop_na(PC1, Year, Longitude, Latitude, fold)
-data$fold
-data$area
 
-
-# plot folds for all locations
-all_folds <- data %>% 
-  drop_na(Longitude, Latitude) %>% 
-  group_by(Longitude, Latitude, fold) %>% 
-  summarise() %>% 
-  ungroup()
-
-ggplot() +
-  geom_point(data = all_folds, aes(x = Longitude, y = Latitude, col = as.factor(fold)))
-
-
-# standardize sampling probabilities, depending on number of occurrencies of location in data
+# standardize sampling probabilities, depending on number of occurrencies of location in the dataset
 weights <- data %>% 
   group_by(route_id, area) %>% 
   summarise(n = n()) %>% 
   mutate(weight = area/n)
 
+# assign final sampling probabilities for single points
 data <- left_join(data, weights)
 
 
