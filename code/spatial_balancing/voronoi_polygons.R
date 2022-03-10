@@ -10,7 +10,6 @@ library(comprehenr)
 library(viridis)
 library(gridExtra)
 
-setwd("C:/Users/Laura/Desktop/final")
 
 ### goal:
 # create a spatially balanced data set by sampling from spatially unbalanced data
@@ -170,21 +169,12 @@ plot_voronoi_2 <- ggplot() +
   theme(legend.position = 'none') +
   scale_size_identity() +
   coord_sf(expand = F)
-  
-empty <- ggplot() +
-  geom_blank() +
-  theme(panel.background = element_rect(fill = 'white', colour = 'white'))
 
 
 # figure of all plots
-pdf("figures/spatial_balancing2.pdf", width = 30, height = 30, paper = "a4")
-grid.arrange(empty, empty , plot_density, plot_voronoi, plot_voronoi_2, plot_sampl_prob,
-             nrow = 3, heights = c(0.05, 2, 2))
-dev.off()
+grid.arrange(plot_density, plot_voronoi, plot_voronoi_2, plot_sampl_prob,
+             nrow = 2)
 
-
-plot_grid(empty, empty , plot_density, plot_voronoi, plot_voronoi_2, plot_sampl_prob,
-          nrow = 3, rel_heights = c(0.05, 2, 2))
 
 # save table
 write.csv(df_areas, "data/areas.csv")
