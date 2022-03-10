@@ -99,7 +99,7 @@ RMSE_glm_ign <- vector(mode = "list", length = length(list_group_effect))
 RMSE_glm_int <- vector(mode = "list", length = length(list_group_effect))
 
 
-# iterate over varying grouo effect
+# iterate over varying group effect
 # each repeated 10 times
 for(i in 1:length(list_group_effect)){
   for(j in 1:10){
