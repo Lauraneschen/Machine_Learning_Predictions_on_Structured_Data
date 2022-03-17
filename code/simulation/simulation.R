@@ -16,7 +16,7 @@ library(comprehenr)
 
 
 ### functions
-# generate randomly distributed group effect (random intercept) for 26 groups
+# generate randomly distributed group effect (random intercept) for 10 groups
 # returns a data frame of groups and their random intercepts
 rand_eff <- function(re_sd){
   groups <- paste(letters)[1:10]
