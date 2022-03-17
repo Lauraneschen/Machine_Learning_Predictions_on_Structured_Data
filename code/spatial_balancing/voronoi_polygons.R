@@ -98,7 +98,6 @@ for(i in 1:length(vor_polygons)){
     else{
       df_areas$area[i] <- 0
     }
-    print(i)
   }
   
   else{
