@@ -3,8 +3,8 @@
 # random effect = groups
 # assumption: impact of groups on y is normally distributed
 # unbalanced data -> one/some groups are overrepresented
-# test the influence of different parameters on the performance of both approaches
-# parameters to be varied: effect of x (= climate variable) on y, group effect on y, random error
+# test the influence of group effect on the performance of both approaches
+# other parameters that could be varied: effect of x (= climate variable) on y, random error
 
 
 ### load required packages
